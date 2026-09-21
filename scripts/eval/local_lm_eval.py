@@ -26,7 +26,7 @@ DATASET_DIRECTORIES = {
 }
 
 TASK_DATASETS = {
-    "gsm8k_cot": {"openai/gsm8k"},
+    "gsm8k": {"openai/gsm8k"},
     "gsm_plus": {"qintongli/GSM-Plus"},
     "minerva_math": {"EleutherAI/hendrycks_math"},
     "mbpp": {"google-research-datasets/mbpp"},

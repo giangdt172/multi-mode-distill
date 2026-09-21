@@ -10,6 +10,7 @@ VENV_PATH="${VENV_PATH:-$BASE_PATH/.venv}"
 RAW_DATA="$ASSET_ROOT/data/raw/google/gemma-2-9b-it/generated_train.jsonl"
 CKPT="$ASSET_ROOT/models/google_gemma-2-2b-it"
 TEACHER_CKPT="$ASSET_ROOT/models/google_gemma-2-9b-it"
+EVAL_DATA_DIR="$ASSET_ROOT/data/eval"
 PROCESSED_DATA_ROOT="$ASSET_ROOT/processed_data/ultraInteract-v2"
 DATA_DIR="$PROCESSED_DATA_ROOT/models/$(basename -- "$CKPT")"
 GEMMA_RESULTS_ROOT="${GEMMA_RESULTS_ROOT:-$BASE_PATH/results/gemma-2-2b-it-distill}"
@@ -33,6 +34,22 @@ hf download VoCuc/UltraInteract-Infer \
     --local-dir "$ASSET_ROOT/data/raw"
 hf download google/gemma-2-2b-it --local-dir "$CKPT"
 hf download google/gemma-2-9b-it --local-dir "$TEACHER_CKPT"
+
+mkdir -p -- "$EVAL_DATA_DIR/code_eval"
+hf download openai/gsm8k --repo-type dataset --local-dir "$EVAL_DATA_DIR/gsm8k"
+hf download qintongli/GSM-Plus --repo-type dataset --local-dir "$EVAL_DATA_DIR/gsm_plus"
+hf download EleutherAI/hendrycks_math --repo-type dataset --local-dir "$EVAL_DATA_DIR/hendrycks_math"
+hf download google-research-datasets/mbpp --repo-type dataset --local-dir "$EVAL_DATA_DIR/mbpp"
+hf download allenai/sciq --repo-type dataset --local-dir "$EVAL_DATA_DIR/sciq"
+hf download cais/mmlu --repo-type dataset --local-dir "$EVAL_DATA_DIR/mmlu"
+hf download TIGER-Lab/MMLU-Pro --repo-type dataset --local-dir "$EVAL_DATA_DIR/mmlu_pro"
+hf download SaylorTwift/bbh --repo-type dataset --local-dir "$EVAL_DATA_DIR/bbh"
+curl --fail --location \
+    https://raw.githubusercontent.com/huggingface/evaluate/v0.4.6/metrics/code_eval/code_eval.py \
+    --output "$EVAL_DATA_DIR/code_eval/code_eval.py"
+curl --fail --location \
+    https://raw.githubusercontent.com/huggingface/evaluate/v0.4.6/metrics/code_eval/execute.py \
+    --output "$EVAL_DATA_DIR/code_eval/execute.py"
 
 PYTHONPATH="$BASE_PATH${PYTHONPATH:+:$PYTHONPATH}" \
 python "$BASE_PATH/tools/process_data_ultraInteract.py" \
@@ -91,6 +108,7 @@ printf '\n[%s 2/2] Evaluate checkpoint: %s\n' "$RUN_NAME" "$LORA_PATH"
 CUDA_DEVICES="$CUDA_DEVICES" LORA_PATH="$LORA_PATH" MODEL_PATH="$CKPT" \
     BASE_PATH="$BASE_PATH" ASSET_ROOT="$ASSET_ROOT" \
     EVAL_VENV_PATH="$VENV_PATH" EVAL_PYTHON="$VENV_PATH/bin/python" \
+    EVAL_DATA_DIR="$EVAL_DATA_DIR" \
     SAVE_PATH="$(dirname -- "$LORA_PATH")" \
     EVAL_MAX_LORA_RANK="${EVAL_MAX_LORA_RANK:-${LORA_R:-16}}" \
     bash "$BASE_PATH/scripts/eval/eval.sh" run
