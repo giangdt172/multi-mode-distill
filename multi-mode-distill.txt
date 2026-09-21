@@ -1,0 +1,23 @@
+# manager: uv
+# python: 3.11
+torch==2.10.0
+peft==0.18.1
+tqdm
+numerize
+deepspeed
+sentencepiece
+protobuf
+nltk
+rouge-score
+torchtyping
+rich
+setuptools
+wandb
+lm_eval[vllm,math]==0.4.12
+vllm==0.18.0
+ray
+evaluate==0.4.6
+transformers==4.56.1
+accelerate==1.10.1
+datasets==4.1.1
+numpy==2.2.6
