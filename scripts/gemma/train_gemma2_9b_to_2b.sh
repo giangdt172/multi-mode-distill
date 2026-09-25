@@ -47,6 +47,12 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 DEV_NUM="${DEV_NUM:-512}"
 SEED="${SEED:-10}"
 
+# Adaptive routing defaults to OFF + SELF + ON; pairwise and SELF-only sets are ablations.
+ADAPTIVE_MODE_SET="${ADAPTIVE_MODE_SET:-all}"
+case "$ADAPTIVE_MODE_SET" in
+    all|on_self|off_self|self_only) ;;
+    *) printf 'ADAPTIVE_MODE_SET must be all, on_self, off_self, or self_only\n' >&2; exit 2 ;;
+esac
 KD_LOSS="${KD_LOSS:-sfkl}"
 KD_RATIO="${KD_RATIO:-0.5}"
 SKEW_ALPHA="${SKEW_ALPHA:-0.1}"
@@ -55,6 +61,8 @@ DISTILL_TEMPERATURE="${DISTILL_TEMPERATURE:-1.0}"
 MAG_WEIGHT="${MAG_WEIGHT:-1.0}"
 GRAM_WEIGHT="${GRAM_WEIGHT:-1.0}"
 CKA_WEIGHT="${CKA_WEIGHT:-1.0}"
+MENGER_WEIGHT="${MENGER_WEIGHT:-0.0}"
+MENGER_EPS="${MENGER_EPS:-1.0e-6}"
 CKA="${CKA:-0}"
 DEFAULT_GEOMETRY=1
 if [[ "$CKA" == 1 ]]; then DEFAULT_GEOMETRY=0; fi
@@ -63,6 +71,21 @@ STEP_SEPARATOR="${STEP_SEPARATOR:-$'\n\n'}"
 LORA_R="${LORA_R:-16}"
 LORA_ALPHA="${LORA_ALPHA:-128}"
 LORA_DROPOUT="${LORA_DROPOUT:-0.05}"
+FINETUNE_ENTRYPOINT="${FINETUNE_ENTRYPOINT:-finetune.py}"
+DRY_RUN="${DRY_RUN:-0}"
+case "$DRY_RUN" in
+    0|1) ;;
+    *) printf 'DRY_RUN must be 0 or 1\n' >&2; exit 2 ;;
+esac
+if [[ "$FINETUNE_ENTRYPOINT" == /* ]]; then
+    FINETUNE_PATH="$FINETUNE_ENTRYPOINT"
+else
+    FINETUNE_PATH="$BASE_PATH/$FINETUNE_ENTRYPOINT"
+fi
+if [[ ! -f "$FINETUNE_PATH" ]]; then
+    printf 'Finetune entrypoint not found: %s\n' "$FINETUNE_PATH" >&2
+    exit 1
+fi
 case "$GEOMETRY" in
     0|1) ;;
     *) printf 'GEOMETRY must be 0 or 1\n' >&2; exit 2 ;;
@@ -75,13 +98,35 @@ if [[ "$GEOMETRY" == 1 && "$CKA" == 1 ]]; then
     printf 'GEOMETRY and CKA are mutually exclusive\n' >&2
     exit 2
 fi
-SAVE_PATH="${SAVE_PATH:-$BASE_PATH/results/${CKPT_NAME}-distill/adaptive1_${KD_LOSS}_k${DISTILL_TOP_K}_geometry${GEOMETRY}_cka${CKA}_bs${BATCH_SIZE}_ga${GRAD_ACC}_lr${LR}_seed${SEED}}"
+ADAPTIVE_MODE_SUFFIX=""
+if [[ "$ADAPTIVE_MODE_SET" != all ]]; then
+    ADAPTIVE_MODE_SUFFIX="_${ADAPTIVE_MODE_SET}"
+fi
+SAVE_PATH="${SAVE_PATH:-$BASE_PATH/results/${CKPT_NAME}-distill/adaptive${ADAPTIVE_MODE_SUFFIX}_${KD_LOSS}_k${DISTILL_TOP_K}_geometry${GEOMETRY}_cka${CKA}_bs${BATCH_SIZE}_ga${GRAD_ACC}_lr${LR}_seed${SEED}}"
+
+MODE_OPTS=()
+if [[ "$ADAPTIVE_MODE_SET" == self_only ]]; then
+    # Fixed SELF distillation uses the frozen student reference and no CE term.
+    MODE_OPTS+=(--kd-ratio 1.0 --distill-mode self_distill --disable-lm-loss)
+else
+    MODE_OPTS+=(
+        --kd-ratio "$KD_RATIO"
+        --teacher-model-path "$TEACHER_CKPT" --teacher-model-type gemma
+        --teacher-ckpt-name "$TEACHER_CKPT_NAME"
+        --dual-adaptive-exposure --do-sample
+        --adaptive-mode-set "$ADAPTIVE_MODE_SET"
+        --rho-self-init "${RHO_SELF_INIT:-0.1}" --rho-on-init "${RHO_ON_INIT:-0.05}"
+        --rho-self-max "${RHO_SELF_MAX:-0.25}" --rho-on-max "${RHO_ON_MAX:-0.25}"
+        --rho-self-increment "${RHO_SELF_INCREMENT:-0.025}"
+        --rho-on-increment "${RHO_ON_INCREMENT:-0.025}"
+        --adaptive-threshold "${ADAPTIVE_THRESHOLD:-0.05}"
+        --self-distill-eval-seed "${SELF_DISTILL_EVAL_SEED:-1234}"
+    )
+fi
 
 OPTS=(
     --base-path "$BASE_PATH"
     --model-path "$CKPT" --model-type gemma --ckpt-name "$CKPT_NAME"
-    --teacher-model-path "$TEACHER_CKPT" --teacher-model-type gemma
-    --teacher-ckpt-name "$TEACHER_CKPT_NAME"
     --n-gpu "${#GPUS[@]}" --n-nodes "$NNODES" --bf16
     --data-dir "$DATA_DIR" --json-data --num-workers "$NUM_WORKERS" --dev-num "$DEV_NUM"
     --lr "$LR" --batch-size "$BATCH_SIZE" --eval-batch-size "$EVAL_BATCH_SIZE"
@@ -90,18 +135,13 @@ OPTS=(
     --weight-decay 1e-2 --clip-grad 1.0 --epochs "$EPOCHS"
     --max-length "$MAX_LENGTH" --max-prompt-length "$MAX_PROMPT_LENGTH"
     --t-max-length "$T_MAX_LENGTH" --t-max-prompt-length "$T_MAX_PROMPT_LENGTH"
-    --type kd --kd-loss "$KD_LOSS" --kd-ratio "$KD_RATIO"
-    --dual-adaptive-exposure --do-sample
-    --rho-self-init "${RHO_SELF_INIT:-0.1}" --rho-on-init "${RHO_ON_INIT:-0.05}"
-    --rho-self-max "${RHO_SELF_MAX:-0.25}" --rho-on-max "${RHO_ON_MAX:-0.25}"
-    --rho-self-increment "${RHO_SELF_INCREMENT:-0.025}"
-    --rho-on-increment "${RHO_ON_INCREMENT:-0.025}"
-    --adaptive-threshold "${ADAPTIVE_THRESHOLD:-0.05}"
-    --self-distill-eval-seed "${SELF_DISTILL_EVAL_SEED:-1234}"
+    --type kd --kd-loss "$KD_LOSS"
+    "${MODE_OPTS[@]}"
     --self-distill-context-drop-ratio "${SELF_DISTILL_CONTEXT_DROP_MAX:-0.5}"
     --self-distill-context-max-tokens "$CONTEXT_MAX_NEW_TOKENS"
     --skew-alpha "$SKEW_ALPHA"
     --mag-weight "$MAG_WEIGHT" --gram-weight "$GRAM_WEIGHT" --cka-weight "$CKA_WEIGHT"
+    --menger-weight "$MENGER_WEIGHT" --menger-eps "$MENGER_EPS"
     --distill-top-k "$DISTILL_TOP_K" --distill-temperature "$DISTILL_TEMPERATURE"
     --step-separator "$STEP_SEPARATOR" --step-pooling mean
     --magnitude-normalization zscore --eps 1e-6
@@ -128,11 +168,12 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export PYTHONPATH="$BASE_PATH${PYTHONPATH:+:$PYTHONPATH}"
 export CODE_BASE=HF
 
-CMD=(torchrun "${DISTRIBUTED_ARGS[@]}" "$BASE_PATH/finetune.py" "${OPTS[@]}" "$@")
+CMD=(torchrun "${DISTRIBUTED_ARGS[@]}" "$FINETUNE_PATH" "${OPTS[@]}" "$@")
 printf 'CUDA_VISIBLE_DEVICES=%s\n' "$CUDA_VISIBLE_DEVICES"
 printf 'Command: '
 printf '%q ' "${CMD[@]}"
 printf '\n'
 
+if [[ "$DRY_RUN" == 1 ]]; then exit 0; fi
 mkdir -p -- "$SAVE_PATH"
 exec "${CMD[@]}"
