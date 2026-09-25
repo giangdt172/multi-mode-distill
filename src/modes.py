@@ -24,6 +24,9 @@ def validate_mode_args(args):
         raise ValueError("Old adaptive scheduler arguments were removed: " +
                          ", ".join("--" + name for name in old_flags))
     adaptive = getattr(args, "adaptive_on_policy", False)
+    adaptive_mode_set = getattr(args, "adaptive_mode_set", "all")
+    if adaptive_mode_set != "all" and not adaptive:
+        raise ValueError("--adaptive-mode-set requires --dual-adaptive-exposure")
     if adaptive:
         from .adaptive import AdaptiveConfig
         AdaptiveConfig.from_args(args)
@@ -99,6 +102,14 @@ def validate_mode_args(args):
         raise ValueError("Self-distillation reference length must fit the full student response")
     if not 0 <= args.self_distill_context_drop_ratio <= 1 or not math.isfinite(args.self_distill_context_drop_ratio):
         raise ValueError("--self-distill-context-drop-ratio must be finite and in [0, 1]")
+    args.self_distill_context_fixed_drop_ratio = getattr(
+        args, "self_distill_context_fixed_drop_ratio", None)
+    fixed_drop_ratio = args.self_distill_context_fixed_drop_ratio
+    if (fixed_drop_ratio is not None
+            and (not math.isfinite(fixed_drop_ratio)
+                 or not 0 <= fixed_drop_ratio <= 1)):
+        raise ValueError(
+            "--self-distill-context-fixed-drop-ratio must be finite and in [0, 1]")
     if args.self_distill_context_max_tokens < 0:
         raise ValueError("--self-distill-context-max-tokens must be nonnegative")
     if "{context}" not in args.self_distill_context_template:

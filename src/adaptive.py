@@ -51,9 +51,27 @@ class AdaptiveConfig:
 
 class AdaptiveScheduler:
     MODES = ("off_policy", "self_distill", "on_policy")
+    ROUTING_ORDER = ("on_policy", "self_distill", "off_policy")
+    MODE_SETS = {
+        "all": MODES,
+        "on_self": ("self_distill", "on_policy"),
+        "off_self": ("off_policy", "self_distill"),
+    }
+    MONITORED_MODE_SETS = {
+        "all": ("self_distill", "on_policy"),
+        "on_self": ("on_policy",),
+        "off_self": ("self_distill",),
+    }
 
-    def __init__(self, config=None, seed=42):
+    def __init__(self, config=None, seed=42, mode_set="all"):
         self.config = config or AdaptiveConfig()
+        if mode_set not in self.MODE_SETS:
+            raise ValueError(
+                f"Unknown adaptive mode set {mode_set!r}; "
+                f"choose one of {', '.join(self.MODE_SETS)}")
+        self.mode_set = mode_set
+        self.enabled_modes = self.MODE_SETS[mode_set]
+        self.monitored_modes = self.MONITORED_MODE_SETS[mode_set]
         self.rng = random.Random(seed)
         self.rho_self = self.config.rho_self_init
         self.rho_on = self.config.rho_on_init
@@ -63,7 +81,28 @@ class AdaptiveScheduler:
 
     @property
     def rho_off(self):
-        return 1.0 - self.rho_self - self.rho_on
+        return self.mode_probabilities["off_policy"]
+
+    @property
+    def mode_probabilities(self):
+        """Return probabilities, with one adaptive degree of freedom per pair."""
+        if self.mode_set == "on_self":
+            return {
+                "off_policy": 0.0,
+                "self_distill": 1.0 - self.rho_on,
+                "on_policy": self.rho_on,
+            }
+        if self.mode_set == "off_self":
+            return {
+                "off_policy": 1.0 - self.rho_self,
+                "self_distill": self.rho_self,
+                "on_policy": 0.0,
+            }
+        return {
+            "off_policy": 1.0 - self.rho_self - self.rho_on,
+            "self_distill": self.rho_self,
+            "on_policy": self.rho_on,
+        }
 
     def sample_mode(self, device=None):
         """Rank zero draws once; every rank receives the same categorical mode."""
@@ -71,7 +110,17 @@ class AdaptiveScheduler:
         mode_id = 0
         if not distributed or dist.get_rank() == 0:
             u = self.rng.random()
-            mode_id = 2 if u < self.rho_on else 1 if u < self.rho_on + self.rho_self else 0
+            cumulative = 0.0
+            probabilities = self.mode_probabilities
+            selected_mode = self.ROUTING_ORDER[-1]
+            for mode in self.ROUTING_ORDER:
+                if probabilities[mode] > 0:
+                    selected_mode = mode
+                cumulative += probabilities[mode]
+                if u < cumulative:
+                    selected_mode = mode
+                    break
+            mode_id = self.MODES.index(selected_mode)
         if distributed:
             routing_device = (device if device is not None else torch.cuda.current_device()) \
                 if dist.get_backend() == "nccl" else "cpu"
@@ -86,36 +135,50 @@ class AdaptiveScheduler:
             raise ValueError(f"Unknown distillation mode: {mode}")
         self.counts[mode] += 1
 
-    def on_evaluation(self, self_loss, on_loss):
-        if not math.isfinite(self_loss) or not math.isfinite(on_loss):
-            raise FloatingPointError("Non-finite adaptive evaluation loss")
+    def on_evaluation(self, self_loss=None, on_loss=None):
+        losses = {"self_distill": self_loss, "on_policy": on_loss}
+        monitored_modes = self.monitored_modes
+        for mode in monitored_modes:
+            loss = losses[mode]
+            if loss is None:
+                raise ValueError(f"Missing adaptive evaluation loss for {mode}")
+            if not math.isfinite(loss):
+                raise FloatingPointError("Non-finite adaptive evaluation loss")
         self_deterioration = on_deterioration = None
         self_updated = on_updated = False
-        if self.ref_self_loss is None:
-            self.ref_self_loss = self_loss
-            self.ref_on_loss = on_loss
-        else:
-            c = self.config
-            self_deterioration = (self_loss - self.ref_self_loss) / (abs(self.ref_self_loss) + c.eps)
-            on_deterioration = (on_loss - self.ref_on_loss) / (abs(self.ref_on_loss) + c.eps)
-            if self_deterioration > c.deterioration_threshold:
-                new_rho = min(self.rho_self + c.rho_self_increment, c.rho_self_max)
-                self_updated = new_rho > self.rho_self
-                self.rho_self = new_rho
+        c = self.config
+        if "self_distill" in monitored_modes:
+            if self.ref_self_loss is None:
                 self.ref_self_loss = self_loss
             else:
-                self.ref_self_loss = min(self.ref_self_loss, self_loss)
-            if on_deterioration > c.deterioration_threshold:
-                new_rho = min(self.rho_on + c.rho_on_increment, c.rho_on_max)
-                on_updated = new_rho > self.rho_on
-                self.rho_on = new_rho
+                self_deterioration = (self_loss - self.ref_self_loss) / (abs(self.ref_self_loss) + c.eps)
+                if self_deterioration > c.deterioration_threshold:
+                    new_rho = min(self.rho_self + c.rho_self_increment, c.rho_self_max)
+                    self_updated = new_rho > self.rho_self
+                    self.rho_self = new_rho
+                    self.ref_self_loss = self_loss
+                else:
+                    self.ref_self_loss = min(self.ref_self_loss, self_loss)
+        if "on_policy" in monitored_modes:
+            if self.ref_on_loss is None:
                 self.ref_on_loss = on_loss
             else:
-                self.ref_on_loss = min(self.ref_on_loss, on_loss)
+                on_deterioration = (on_loss - self.ref_on_loss) / (abs(self.ref_on_loss) + c.eps)
+                if on_deterioration > c.deterioration_threshold:
+                    new_rho = min(self.rho_on + c.rho_on_increment, c.rho_on_max)
+                    on_updated = new_rho > self.rho_on
+                    self.rho_on = new_rho
+                    self.ref_on_loss = on_loss
+                else:
+                    self.ref_on_loss = min(self.ref_on_loss, on_loss)
+        probabilities = self.mode_probabilities
         return {
-            "scheduler/rho_off": self.rho_off,
-            "scheduler/rho_self": self.rho_self,
-            "scheduler/rho_on": self.rho_on,
+            "scheduler/mode_set": self.mode_set,
+            "scheduler/enabled_modes": list(self.enabled_modes),
+            "scheduler/monitored_modes": list(self.monitored_modes),
+            "scheduler/rho_off": probabilities["off_policy"],
+            "scheduler/rho_self": probabilities["self_distill"],
+            "scheduler/rho_on": probabilities["on_policy"],
             "scheduler/eval_self_loss": self_loss,
             "scheduler/eval_on_loss": on_loss,
             "scheduler/ref_self_loss": self.ref_self_loss,

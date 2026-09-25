@@ -1,6 +1,8 @@
 """Menger-curvature distillation over marker-delimited reasoning steps."""
 
 import math
+import os
+from functools import lru_cache
 
 import torch
 
@@ -72,12 +74,38 @@ def _step_token_ranges(tokenizer, token_ids, separator):
         add_special_tokens=False,
         return_offsets_mapping=True,
     )
-    if list(encoded["input_ids"]) != ids:
-        raise ValueError(
-            "Decoded response does not round-trip to its token IDs; "
-            "cannot locate reasoning-step boundaries exactly"
-        )
-    offsets = encoded["offset_mapping"]
+    round_trips = list(encoded["input_ids"]) == ids
+    offsets = encoded["offset_mapping"] if round_trips else None
+    if not round_trips:
+        # Re-encoding a response without its prompt can change BPE merges.
+        # Decode prefixes of the original IDs to keep boundaries aligned with
+        # the hidden states used by this loss.
+        @lru_cache(maxsize=None)
+        def decoded_prefix(count):
+            return tokenizer.decode(
+                ids[:count], skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+
+        def first_prefix_at(position, *, past):
+            low, high = 1, len(ids)
+            while low < high:
+                middle = (low + high) // 2
+                prefix = decoded_prefix(middle)
+                if past:
+                    # A partial UTF-8 character can decode as U+FFFD. Count
+                    # its first token when locating the start of a step.
+                    reached = len(prefix) > position
+                else:
+                    # Wait until the text through the end of a step is stable.
+                    stable_length = len(os.path.commonprefix((text, prefix)))
+                    reached = stable_length >= position
+                if reached:
+                    high = middle
+                else:
+                    low = middle + 1
+            return low
+
     ranges = []
     cursor = 0
     parts = text.split(separator)
@@ -87,13 +115,19 @@ def _step_token_ranges(tokenizer, token_ids, separator):
         if stripped:
             content_start = cursor + len(part) - len(part.lstrip())
             content_end = part_end - (len(part) - len(part.rstrip()))
-            covered = [
-                index
-                for index, (start, end) in enumerate(offsets)
-                if end > content_start and start < content_end
-            ]
-            if covered:
-                ranges.append((covered[0], covered[-1] + 1))
+            if round_trips:
+                covered = [
+                    index
+                    for index, (start, end) in enumerate(offsets)
+                    if end > content_start and start < content_end
+                ]
+                if covered:
+                    ranges.append((covered[0], covered[-1] + 1))
+            else:
+                start = first_prefix_at(content_start, past=True) - 1
+                end = first_prefix_at(content_end, past=False)
+                if start < end:
+                    ranges.append((start, end))
         cursor = part_end + len(separator)
     return ranges
 

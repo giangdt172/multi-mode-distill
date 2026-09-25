@@ -1,6 +1,7 @@
 """Build contextual trajectories for a frozen earlier student."""
 
 import copy
+import math
 
 import torch
 
@@ -46,7 +47,13 @@ def complete_visible_steps(sample, tokenizer, separator):
     return steps
 
 
-def sample_context(steps, separator, max_drop_ratio, rng):
+def sample_context(steps, separator, max_drop_ratio, rng, fixed_drop_ratio=None):
+    if fixed_drop_ratio is not None:
+        # Drop a fixed fraction from the tail.  Since the unit is a complete
+        # step, round the number removed up to satisfy the requested ratio.
+        drop_count = math.ceil(len(steps) * fixed_drop_ratio)
+        keep_count = len(steps) - drop_count
+        return separator.join(steps[:keep_count]) if keep_count else ""
     if len(steps) < 2:
         return ""
     drop_ratio = rng.uniform(0.0, max_drop_ratio)
@@ -157,7 +164,8 @@ def prepare_self_distill_batches(args, tokenizer, student_batch, metadata, rng):
         response = response[:min(args.max_length - len(prompt), args.t_max_length - 1)]
         row_rng = rng[index] if isinstance(rng, list) else rng
         context = sample_context(steps, args.step_separator,
-                                 args.self_distill_context_drop_ratio, row_rng)
+                                 args.self_distill_context_drop_ratio, row_rng,
+                                 getattr(args, "self_distill_context_fixed_drop_ratio", None))
         budget = min(args.t_max_prompt_length, args.t_max_length - len(response))
         ref_ids, context, context_tokens = _fit_reference_prompt(
             record, tokenizer, context, args.self_distill_context_template,

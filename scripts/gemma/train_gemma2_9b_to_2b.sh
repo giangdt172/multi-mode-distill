@@ -4,9 +4,10 @@ set -euo pipefail
 BASE_PATH="${BASE_PATH:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$BASE_PATH"
 BASE_PATH="$PWD"
-ASSET_ROOT="${ASSET_ROOT:-/mnt/local/aiskylimit_new_nothing/reasoning_velocity_distill}"
-VENV_PATH="${VENV_PATH:-/mnt/local/uvenvs/reasoning-velocity-distill}"
+ASSET_ROOT="${ASSET_ROOT:-$BASE_PATH}"
+VENV_PATH="${VENV_PATH:-$BASE_PATH/.venv}"
 source "$VENV_PATH/bin/activate"
+export HF_HOME="${HF_HOME:-$BASE_PATH/.cache/huggingface}"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_DEVICES:-${CUDA_VISIBLE_DEVICES:-${GPU_IDS:-0,1}}}"
 IFS=, read -r -a GPUS <<< "$CUDA_VISIBLE_DEVICES"
@@ -21,9 +22,9 @@ DISTRIBUTED_ARGS=(
 
 CKPT_NAME="gemma-2-2b-it"
 TEACHER_CKPT_NAME="gemma-2-9b-it"
-CKPT="${CKPT:-$ASSET_ROOT/models/google_gemma-2-2b-it}"
-TEACHER_CKPT="${TEACHER_CKPT:-$ASSET_ROOT/models/google_gemma-2-9b-it}"
-PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-$ASSET_ROOT/processed_data/ultraInteract-v2}"
+CKPT="${CKPT:-google/gemma-2-2b-it}"
+TEACHER_CKPT="${TEACHER_CKPT:-google/gemma-2-9b-it}"
+PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-$ASSET_ROOT/data/processed/ultraInteract-v2}"
 RESOLVED_DATA_DIR="$(PYTHONPATH="$BASE_PATH${PYTHONPATH:+:$PYTHONPATH}" python -c \
     'import sys; from tools.process_data_ultraInteract import resolve_processed_data_dir; print(resolve_processed_data_dir(*sys.argv[1:]))' \
     "$PROCESSED_DATA_ROOT" "$CKPT" "$BASE_PATH")"
@@ -49,13 +50,11 @@ SEED="${SEED:-10}"
 KD_LOSS="${KD_LOSS:-sfkl}"
 KD_RATIO="${KD_RATIO:-0.5}"
 SKEW_ALPHA="${SKEW_ALPHA:-0.1}"
-DISTILL_TOP_K="${DISTILL_TOP_K:-512}"
+DISTILL_TOP_K="${DISTILL_TOP_K:-5120}"
 DISTILL_TEMPERATURE="${DISTILL_TEMPERATURE:-1.0}"
 MAG_WEIGHT="${MAG_WEIGHT:-1.0}"
 GRAM_WEIGHT="${GRAM_WEIGHT:-1.0}"
 CKA_WEIGHT="${CKA_WEIGHT:-1.0}"
-MENGER_WEIGHT="${MENGER_WEIGHT:-1.0}"
-MENGER_EPS="${MENGER_EPS:-1.0e-6}"
 CKA="${CKA:-0}"
 DEFAULT_GEOMETRY=1
 if [[ "$CKA" == 1 ]]; then DEFAULT_GEOMETRY=0; fi
@@ -95,15 +94,14 @@ OPTS=(
     --dual-adaptive-exposure --do-sample
     --rho-self-init "${RHO_SELF_INIT:-0.1}" --rho-on-init "${RHO_ON_INIT:-0.05}"
     --rho-self-max "${RHO_SELF_MAX:-0.25}" --rho-on-max "${RHO_ON_MAX:-0.25}"
-    --rho-self-increment "${RHO_SELF_INCREMENT:-0.05}"
-    --rho-on-increment "${RHO_ON_INCREMENT:-0.05}"
+    --rho-self-increment "${RHO_SELF_INCREMENT:-0.025}"
+    --rho-on-increment "${RHO_ON_INCREMENT:-0.025}"
     --adaptive-threshold "${ADAPTIVE_THRESHOLD:-0.05}"
     --self-distill-eval-seed "${SELF_DISTILL_EVAL_SEED:-1234}"
     --self-distill-context-drop-ratio "${SELF_DISTILL_CONTEXT_DROP_MAX:-0.5}"
     --self-distill-context-max-tokens "$CONTEXT_MAX_NEW_TOKENS"
     --skew-alpha "$SKEW_ALPHA"
     --mag-weight "$MAG_WEIGHT" --gram-weight "$GRAM_WEIGHT" --cka-weight "$CKA_WEIGHT"
-    --menger-weight "$MENGER_WEIGHT" --menger-eps "$MENGER_EPS"
     --distill-top-k "$DISTILL_TOP_K" --distill-temperature "$DISTILL_TEMPERATURE"
     --step-separator "$STEP_SEPARATOR" --step-pooling mean
     --magnitude-normalization zscore --eps 1e-6

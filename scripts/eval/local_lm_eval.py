@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import re
 import sys
@@ -12,6 +13,8 @@ from typing import Any
 
 import datasets
 import evaluate
+
+from verify_mbpp import wrap_code_eval_metric
 
 
 DATASET_DIRECTORIES = {
@@ -27,6 +30,7 @@ DATASET_DIRECTORIES = {
 
 TASK_DATASETS = {
     "gsm8k": {"openai/gsm8k"},
+    "gsm8k_cot": {"openai/gsm8k"},
     "gsm_plus": {"qintongli/GSM-Plus"},
     "minerva_math": {"EleutherAI/hendrycks_math"},
     "mbpp": {"google-research-datasets/mbpp"},
@@ -36,6 +40,67 @@ TASK_DATASETS = {
     "mmlu_pro_math": {"TIGER-Lab/MMLU-Pro"},
     "bbh_cot_fewshot": {"SaylorTwift/bbh"},
 }
+
+def merge_system_into_first_user(
+    chat_history: list[dict[str, str]],
+) -> list[dict[str, str]]:
+
+    system_parts: list[str] = []
+    normalized: list[dict[str, str]] = []
+    first_non_system_seen = False
+
+    for message in chat_history:
+        role = message["role"]
+        content = message["content"]
+        if role == "system":
+            if first_non_system_seen:
+                raise ValueError(
+                    "Gemma only supports system instructions before the first user turn"
+                )
+            if content:
+                system_parts.append(content)
+            continue
+        first_non_system_seen = True
+        normalized.append(dict(message))
+
+    if not system_parts:
+        return normalized
+
+    try:
+        first_user = next(
+            index for index, message in enumerate(normalized) if message["role"] == "user"
+        )
+    except StopIteration as error:
+        raise ValueError(
+            "Cannot merge a Gemma system instruction without a user turn"
+        ) from error
+
+    system_text = "\n\n".join(system_parts)
+    user_message = normalized[first_user]
+    user_message["content"] = f"{system_text}\n\n{user_message['content']}"
+    return normalized
+
+
+def install_gemma_vllm_chat_adapter() -> None:
+    """Make lm-eval preserve system instructions when evaluating Gemma 2."""
+    from lm_eval.models.vllm_causallms import VLLM
+
+    original = VLLM.apply_chat_template
+    if getattr(original, "_gemma_system_adapter", False):
+        return
+
+    @functools.wraps(original)
+    def apply_gemma_chat_template(self, chat_history, *args, **kwargs):
+        return original(
+            self,
+            merge_system_into_first_user(chat_history),
+            *args,
+            **kwargs,
+        )
+
+    apply_gemma_chat_template._gemma_system_adapter = True
+    VLLM.apply_chat_template = apply_gemma_chat_template
+
 
 DATA_FILE_PATTERN = re.compile(
     r"^(?P<split>.+?)(?:-\d+-of-\d+)?\.(?:arrow|csv|json|jsonl|parquet)$"
@@ -129,7 +194,10 @@ def install_offline_loaders() -> None:
         metric_file = eval_data_root() / "code_eval" / "code_eval.py"
         require_path(metric_file, "local code_eval metric")
         require_path(metric_file.with_name("execute.py"), "local code_eval executor")
-        return original_evaluate_load(str(metric_file), *args, **kwargs)
+        metric = original_evaluate_load(str(metric_file), *args, **kwargs)
+        if os.environ.get("MBPP_CLEAN_SENTENCEPIECE", "0") == "1":
+            metric = wrap_code_eval_metric(metric)
+        return metric
 
     datasets.load_dataset = load_local_dataset
     evaluate.load = load_local_metric
@@ -173,6 +241,9 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "check":
         check_local_tasks(sys.argv[2:])
         return
+
+    if os.environ.get("EVAL_GEMMA_MERGE_SYSTEM") == "1":
+        install_gemma_vllm_chat_adapter()
 
     from lm_eval.__main__ import cli_evaluate
 

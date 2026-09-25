@@ -22,12 +22,13 @@ DISTRIBUTED_ARGS=(
 BASE_PATH="${BASE_PATH:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$BASE_PATH"
 BASE_PATH="$PWD"
-ASSET_ROOT="${ASSET_ROOT:-/mnt/local/aiskylimit_new_nothing/reasoning_velocity_distill}"
+ASSET_ROOT="${ASSET_ROOT:-$BASE_PATH}"
+export HF_HOME="${HF_HOME:-$BASE_PATH/.cache/huggingface}"
 CKPT_NAME="qwen2.5-1.5B-Instruct"
 TEACHER_CKPT_NAME="qwen2.5-14B-Instruct"
-CKPT="${CKPT:-$ASSET_ROOT/models/Qwen2.5_1.5B-Instruct}"
-TEACHER_CKPT="${TEACHER_CKPT:-$ASSET_ROOT/models/Qwen2.5_14B-Instruct}"
-DATA_DIR="${DATA_DIR:-$ASSET_ROOT/processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct}"
+CKPT="${CKPT:-Qwen/Qwen2.5-1.5B-Instruct}"
+TEACHER_CKPT="${TEACHER_CKPT:-Qwen/Qwen2.5-14B-Instruct}"
+DATA_DIR="${DATA_DIR:-$ASSET_ROOT/data/processed/ultraInteract-v2/Qwen/Qwen2.5-1.5B-Instruct}"
 DS_CONFIG="${DS_CONFIG:-$BASE_PATH/configs/deepspeed/ds_config_bf16.json}"
 
 BATCH_SIZE="${BATCH_SIZE:-8}"
@@ -48,14 +49,19 @@ SEED="${SEED:-10}"
 
 KD_LOSS="${KD_LOSS:-sfkl}"
 SKEW_ALPHA="${SKEW_ALPHA:-0.1}"
-KD_RATIO="${KD_RATIO:-1.0}"
+if [[ "$MODE" == off_policy || "$MODE" == self_distill ]]; then
+    KD_RATIO="${KD_RATIO:-0.5}"
+else
+    KD_RATIO="${KD_RATIO:-1.0}"
+fi
 MAG_WEIGHT="${MAG_WEIGHT:-1.0}"
 GRAM_WEIGHT="${GRAM_WEIGHT:-1.0}"
 CKA_WEIGHT="${CKA_WEIGHT:-1.0}"
 CKA="${CKA:-0}"
-DISTILL_TOP_K="${DISTILL_TOP_K:-512}"
+DISTILL_TOP_K="${DISTILL_TOP_K:-5120}"
 DISTILL_TEMPERATURE="${DISTILL_TEMPERATURE:-1.0}"
 SELF_DISTILL_CONTEXT_DROP_MAX="${SELF_DISTILL_CONTEXT_DROP_MAX:-0.5}"
+SELF_DISTILL_CONTEXT_FIXED_DROP_RATIO="${SELF_DISTILL_CONTEXT_FIXED_DROP_RATIO:-}"
 STEP_SEPARATOR="${STEP_SEPARATOR:-$'\n\n'}"
 STEP_POOLING="${STEP_POOLING:-mean}"
 MAGNITUDE_NORMALIZATION="${MAGNITUDE_NORMALIZATION:-zscore}"
@@ -95,7 +101,7 @@ OPTS=(
     --weight-decay 1e-2 --clip-grad 1.0 --epochs "$EPOCHS"
     --max-length "$MAX_LENGTH" --max-prompt-length "$MAX_PROMPT_LENGTH"
     --t-max-length "$T_MAX_LENGTH" --t-max-prompt-length "$T_MAX_PROMPT_LENGTH"
-    --type kd --distill-mode "$MODE" --kd-loss "$KD_LOSS" --kd-ratio "$KD_RATIO" --disable-lm-loss
+    --type kd --distill-mode "$MODE" --kd-loss "$KD_LOSS" --kd-ratio "$KD_RATIO"
     --skew-alpha "$SKEW_ALPHA"
     --mag-weight "$MAG_WEIGHT" --gram-weight "$GRAM_WEIGHT" --cka-weight "$CKA_WEIGHT"
     --distill-top-k "$DISTILL_TOP_K" --distill-temperature "$DISTILL_TEMPERATURE"
@@ -126,9 +132,13 @@ fi
 if [[ "$MODE" == self_distill ]]; then
     OPTS+=(--self-distill-context-drop-ratio "$SELF_DISTILL_CONTEXT_DROP_MAX"
            --self-distill-context-max-tokens "$CONTEXT_MAX_NEW_TOKENS")
+    if [[ -n "$SELF_DISTILL_CONTEXT_FIXED_DROP_RATIO" ]]; then
+        OPTS+=(--self-distill-context-fixed-drop-ratio
+               "$SELF_DISTILL_CONTEXT_FIXED_DROP_RATIO")
+    fi
 fi
 if [[ "$MODE" == opsd ]]; then
-    OPTS+=(--opsd-token-clip "${OPSD_TOKEN_CLIP:-0.05}")
+    OPTS+=(--disable-lm-loss --opsd-token-clip "${OPSD_TOKEN_CLIP:-0.05}")
 fi
 
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"

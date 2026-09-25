@@ -269,18 +269,24 @@ def teacher_batch_for_response(args, student_batch):
     return teacher_batch
 
 
-def evaluate_adaptive_losses(args, tokenizer, model, teacher_model, reference_model, dataset, device):
-    """Token-weighted canonical SELF and deterministic ON discrepancies."""
+def evaluate_adaptive_losses(args, tokenizer, model, teacher_model, reference_model,
+                             dataset, device, monitored_modes=AdaptiveScheduler.MODES):
+    """Return token-weighted dev discrepancies for monitored adaptive modes."""
     if not dataset.with_teacher or not dataset.needs_self_distill_context:
         raise ValueError("Adaptive dev data must include canonical self-distillation steps")
+    evaluation_modes = tuple(
+        mode for mode in ("self_distill", "on_policy") if mode in monitored_modes)
+    if not evaluation_modes:
+        raise ValueError("Adaptive routing requires SELF or ON evaluation")
     world_size, rank = dist.get_world_size(), dist.get_rank()
     sampler = DistributedSampler(dataset, shuffle=False, drop_last=False,
                                  rank=rank, num_replicas=world_size)
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.eval_batch_size,
                             num_workers=args.num_workers, collate_fn=dataset.collate)
-    generator = SampleGenerator(args, tokenizer, do_sample=False)
-    # Sum of token losses and token counts for SELF, then ON.
-    stats = torch.zeros(4, dtype=torch.float64, device=device)
+    generator = (SampleGenerator(args, tokenizer, do_sample=False)
+                 if "on_policy" in evaluation_modes else None)
+    # One token-loss sum and token count per evaluated mode.
+    stats = torch.zeros(2 * len(evaluation_modes), dtype=torch.float64, device=device)
     offset = 0
     was_training = model.training
     model.eval()
@@ -293,7 +299,8 @@ def evaluate_adaptive_losses(args, tokenizer, model, teacher_model, reference_mo
                 rows = torch.arange(model_batch["input_ids"].shape[0], device=device) + offset
                 valid_rows = rows * world_size + rank < len(dataset)
                 offset += rows.numel()
-                for mode, start in (("self_distill", 0), ("on_policy", 2)):
+                for mode_index, mode in enumerate(evaluation_modes):
+                    start = 2 * mode_index
                     if mode == "self_distill":
                         sample_ids = (rows * world_size + rank).tolist()
                         rngs = [random.Random(args.self_distill_eval_seed + sample_id)
@@ -323,12 +330,16 @@ def evaluate_adaptive_losses(args, tokenizer, model, teacher_model, reference_mo
     finally:
         model.train(was_training)
     dist.all_reduce(stats, dist.ReduceOp.SUM)
-    if (stats[1] == 0).item() or (stats[3] == 0).item():
-        raise ValueError("Adaptive dev evaluation has no response tokens")
-    losses = (stats[0] / stats[1], stats[2] / stats[3])
-    if not all(torch.isfinite(loss).item() for loss in losses):
-        raise FloatingPointError("Non-finite adaptive dev KD loss")
-    return tuple(loss.item() for loss in losses)
+    losses = {}
+    for mode_index, mode in enumerate(evaluation_modes):
+        loss_sum, token_count = stats[2 * mode_index:2 * mode_index + 2]
+        if (token_count == 0).item():
+            raise ValueError(f"Adaptive {mode} dev evaluation has no response tokens")
+        loss = loss_sum / token_count
+        if not torch.isfinite(loss).item():
+            raise FloatingPointError(f"Non-finite adaptive {mode} dev KD loss")
+        losses[mode] = loss.item()
+    return losses
 
 
 def finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, teacher_model=None):
@@ -349,10 +360,14 @@ def finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, t
         num_workers=args.num_workers, collate_fn=dataset["train"].collate)
 
     adaptive = getattr(args, "adaptive_on_policy", False)
-    scheduler = AdaptiveScheduler(AdaptiveConfig.from_args(args), seed=getattr(args, "seed", 42)) if adaptive else None
+    scheduler = (AdaptiveScheduler(
+        AdaptiveConfig.from_args(args), seed=getattr(args, "seed", 42),
+        mode_set=getattr(args, "adaptive_mode_set", "all"))
+        if adaptive else None)
     if adaptive and (teacher_model is None or "dev" not in dataset or args.eval_interval < 1):
         raise ValueError("Adaptive training requires a teacher, dev data, and positive eval_interval")
-    student_gen = adaptive or args.distill_mode in ("on_policy", "opsd")
+    student_gen = ((adaptive and "on_policy" in scheduler.enabled_modes)
+                   or args.distill_mode in ("on_policy", "opsd"))
     student_generator = SampleGenerator(args, tokenizer) if student_gen else None
     if teacher_model is not None:
         teacher_model.requires_grad_(False)
@@ -583,9 +598,12 @@ def finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, t
                 evaluate(args, tokenizer, model, dataset["dev"], "dev", epoch, device,
                          global_step=global_step)
                 if scheduler:
-                    self_loss, on_loss = evaluate_adaptive_losses(
-                        args, tokenizer, model, teacher_model, reference_model, dataset["dev"], device)
-                    scheduler_log = scheduler.on_evaluation(self_loss, on_loss)
+                    adaptive_losses = evaluate_adaptive_losses(
+                        args, tokenizer, model, teacher_model, reference_model,
+                        dataset["dev"], device, scheduler.monitored_modes)
+                    scheduler_log = scheduler.on_evaluation(
+                        self_loss=adaptive_losses.get("self_distill"),
+                        on_loss=adaptive_losses.get("on_policy"))
                     scheduler_log["global_step"] = global_step
                     log_str = "scheduler | " + json.dumps(scheduler_log, sort_keys=True, allow_nan=False)
                     print_rank(log_str)

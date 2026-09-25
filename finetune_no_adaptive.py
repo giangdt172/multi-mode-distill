@@ -43,7 +43,7 @@ from src.self_distill import (make_reference_model, prepare_self_distill_batches
 
 torch.set_num_threads(4)
 
-OFF_POLICY_RATIO = float(os.environ.get("OFF_POLICY_RATIO", "0.90"))
+OFF_POLICY_RATIO = float(os.environ.get("OFF_POLICY_RATIO", "0.60"))
 SELF_DISTILL_RATIO = float(os.environ.get("SELF_DISTILL_RATIO", "0.20"))
 ON_POLICY_RATIO = float(os.environ.get("ON_POLICY_RATIO", "0.20"))
 
@@ -378,8 +378,10 @@ def finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, t
 
             logits = outputs.logits
             h_stu = outputs.hidden_states[-1] if use_geometry else None
+            # Fresh on-policy trajectories use teacher objectives without CE.
+            use_lm_loss = not args.disable_lm_loss and selected_mode != "on_policy"
             lm_loss = logits.reshape(-1)[:0].sum()
-            if not args.disable_lm_loss:
+            if use_lm_loss:
                 lm_loss = loss_func(
                     logits.float().reshape(-1, logits.shape[-1]), no_model_batch["label"].reshape(-1))
                 lm_loss = lm_loss / (no_model_batch["label"] != -100).sum().clamp_min(1)
@@ -413,10 +415,10 @@ def finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, t
                             pooling=args.step_pooling, normalization=args.magnitude_normalization, eps=args.eps)
                         distil_loss = distil_loss + args.mag_weight * magnitude_loss + args.gram_weight * gram_loss
 
-                if args.disable_lm_loss:
-                    loss = distil_loss
-                else:
+                if use_lm_loss:
                     loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
+                else:
+                    loss = distil_loss
             else:
                 loss = lm_loss
 

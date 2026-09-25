@@ -5,8 +5,8 @@ set -euo pipefail
 BASE_PATH="${BASE_PATH:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
 cd "$BASE_PATH"
 
-ASSET_ROOT="${ASSET_ROOT:-/mnt/local/aiskylimit_new_nothing/reasoning_velocity_distill}"
-VENV_PATH="${VENV_PATH:-/mnt/local/uvenvs/reasoning-velocity-distill}"
+ASSET_ROOT="${ASSET_ROOT:-$BASE_PATH}"
+VENV_PATH="${VENV_PATH:-$BASE_PATH/.venv}"
 if [[ ! -f "$VENV_PATH/bin/activate" ]]; then
     printf 'Training virtualenv not found: %s\n' "$VENV_PATH" >&2
     exit 1
@@ -22,10 +22,10 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export CODE_BASE=HF
 
 # Paths follow project_commands.sh and remain overridable from the environment.
-CKPT="${CKPT:-$ASSET_ROOT/models/Qwen2.5_1.5B-Instruct}"
-TEACHER_CKPT="${TEACHER_CKPT:-$ASSET_ROOT/models/Qwen2.5_14B-Instruct}"
-PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-$ASSET_ROOT/processed_data/ultraInteract-v2}"
-DATA_DIR="${DATA_DIR:-$PROCESSED_DATA_ROOT/models/$(basename -- "$CKPT")}"
+CKPT="${CKPT:-Qwen/Qwen2.5-1.5B-Instruct}"
+TEACHER_CKPT="${TEACHER_CKPT:-Qwen/Qwen2.5-14B-Instruct}"
+PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-$ASSET_ROOT/data/processed/ultraInteract-v2}"
+DATA_DIR="${DATA_DIR:-$PROCESSED_DATA_ROOT/$CKPT}"
 DS_CONFIG="${DS_CONFIG:-$BASE_PATH/configs/deepspeed/ds_config_bf16.json}"
 
 CKPT_NAME="${CKPT_NAME:-qwen2.5-1.5B-Instruct}"

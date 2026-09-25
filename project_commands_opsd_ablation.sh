@@ -5,10 +5,10 @@ BASE_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export BASE_PATH
 cd "$BASE_PATH"
 
-export ASSET_ROOT="${ASSET_ROOT:-/mnt/local/aiskylimit_new_nothing/reasoning_velocity_distill}"
-export CKPT="${CKPT:-$ASSET_ROOT/models/Qwen2.5_1.5B-Instruct}"
-PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-$ASSET_ROOT/processed_data/ultraInteract-v2}"
-export DATA_DIR="${DATA_DIR:-$PROCESSED_DATA_ROOT/models/$(basename -- "$CKPT")}"
+export ASSET_ROOT="${ASSET_ROOT:-$BASE_PATH}"
+export CKPT="${CKPT:-Qwen/Qwen2.5-1.5B-Instruct}"
+PROCESSED_DATA_ROOT="${PROCESSED_DATA_ROOT:-$ASSET_ROOT/data/processed/ultraInteract-v2}"
+export DATA_DIR="${DATA_DIR:-$PROCESSED_DATA_ROOT/$CKPT}"
 export CUDA_DEVICES="${CUDA_DEVICES:-4,5,6,7}"
 export BATCH_SIZE="${BATCH_SIZE:-8}" GRAD_ACC="${GRAD_ACC:-4}"
 export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-2}"
@@ -33,7 +33,7 @@ if [[ "${DRY_RUN:-0}" != 1 ]]; then
         printf 'OPSD requires processed train and valid/dev JSONL files in %s\n' "$DATA_DIR" >&2
         exit 1
     }
-    VENV_PATH="${VENV_PATH:-/mnt/local/uvenvs/reasoning-velocity-distill}"
+    VENV_PATH="${VENV_PATH:-$BASE_PATH/.venv}"
     source "$VENV_PATH/bin/activate"
 fi
 

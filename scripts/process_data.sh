@@ -7,7 +7,7 @@ export TF_CPP_MIN_LOG_LEVEL=3
 
 PYTHONPATH=. python ./tools/process_data_ultraInteract.py \
     --data-dir ./data/Qwen/Qwen2.5-14B-Instruct/generated_train.jsonl \
-    --processed-data-dir ./processed_data/ultraInteract \
+    --processed-data-dir ./data/processed/ultraInteract \
     --model-path Qwen/Qwen2.5-14B-Instruct \
     --data-process-workers 32 \
     --max-length 2048 \

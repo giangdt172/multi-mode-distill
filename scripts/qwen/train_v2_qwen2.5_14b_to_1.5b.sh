@@ -20,12 +20,13 @@ DISTRIBUTED_ARGS=(
 BASE_PATH="${BASE_PATH:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$BASE_PATH"
 BASE_PATH="$PWD"
-ASSET_ROOT="${ASSET_ROOT:-/mnt/local/aiskylimit_new_nothing/reasoning_velocity_distill}"
+ASSET_ROOT="${ASSET_ROOT:-$BASE_PATH}"
+export HF_HOME="${HF_HOME:-$BASE_PATH/.cache/huggingface}"
 CKPT_NAME="qwen2.5-1.5B-Instruct"
 TEACHER_CKPT_NAME="qwen2.5-14B-Instruct"
-CKPT="${CKPT:-$ASSET_ROOT/models/Qwen2.5_1.5B-Instruct}"
-TEACHER_CKPT="${TEACHER_CKPT:-$ASSET_ROOT/models/Qwen2.5_14B-Instruct}"
-DATA_DIR="${DATA_DIR:-$ASSET_ROOT/processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct}"
+CKPT="${CKPT:-Qwen/Qwen2.5-1.5B-Instruct}"
+TEACHER_CKPT="${TEACHER_CKPT:-Qwen/Qwen2.5-14B-Instruct}"
+DATA_DIR="${DATA_DIR:-$ASSET_ROOT/data/processed/ultraInteract-v2/Qwen/Qwen2.5-1.5B-Instruct}"
 DS_CONFIG="${DS_CONFIG:-$BASE_PATH/configs/deepspeed/ds_config_bf16.json}"
 
 BATCH_SIZE="${BATCH_SIZE:-8}"
@@ -45,7 +46,12 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 DEV_NUM="${DEV_NUM:-512}"
 SEED="${SEED:-10}"
 
-# Dual adaptive across OFF, self-distillation, and ON-policy updates.
+# Adaptive routing defaults to OFF + SELF + ON; pairwise sets are ablations.
+ADAPTIVE_MODE_SET="${ADAPTIVE_MODE_SET:-all}"
+case "$ADAPTIVE_MODE_SET" in
+    all|on_self|off_self) ;;
+    *) printf 'ADAPTIVE_MODE_SET must be all, on_self, or off_self\n' >&2; exit 2 ;;
+esac
 KD_LOSS="${KD_LOSS:-sfkl}"
 SKEW_ALPHA="${SKEW_ALPHA:-0.1}"
 KD_RATIO="${KD_RATIO:-0.5}"
@@ -56,7 +62,7 @@ CKA="${CKA:-0}"
 DEFAULT_GEOMETRY=1
 if [[ "$CKA" == 1 ]]; then DEFAULT_GEOMETRY=0; fi
 GEOMETRY="${GEOMETRY:-$DEFAULT_GEOMETRY}"
-DISTILL_TOP_K="${DISTILL_TOP_K:-512}"
+DISTILL_TOP_K="${DISTILL_TOP_K:-5120}"
 DISTILL_TEMPERATURE="${DISTILL_TEMPERATURE:-1.0}"
 SELF_DISTILL_CONTEXT_DROP_MAX="${SELF_DISTILL_CONTEXT_DROP_MAX:-0.5}"
 STEP_SEPARATOR="${STEP_SEPARATOR:-$'\n\n'}"
@@ -77,7 +83,11 @@ if [[ "$GEOMETRY" == 1 && "$CKA" == 1 ]]; then
     printf 'GEOMETRY and CKA are mutually exclusive\n' >&2
     exit 2
 fi
-SAVE_PATH="${SAVE_PATH:-$BASE_PATH/results/${CKPT_NAME}-v2/adaptive_${KD_LOSS}_k${DISTILL_TOP_K}_geometry${GEOMETRY}_cka${CKA}_bs${BATCH_SIZE}_ga${GRAD_ACC}_lr${LR}_seed${SEED}}"
+ADAPTIVE_MODE_SUFFIX=""
+if [[ "$ADAPTIVE_MODE_SET" != all ]]; then
+    ADAPTIVE_MODE_SUFFIX="_${ADAPTIVE_MODE_SET}"
+fi
+SAVE_PATH="${SAVE_PATH:-$BASE_PATH/results/${CKPT_NAME}-v2/adaptive${ADAPTIVE_MODE_SUFFIX}_${KD_LOSS}_k${DISTILL_TOP_K}_geometry${GEOMETRY}_cka${CKA}_bs${BATCH_SIZE}_ga${GRAD_ACC}_lr${LR}_seed${SEED}}"
 
 OPTS=()
 
@@ -96,7 +106,7 @@ OPTS+=(--weight-decay 1e-2 --clip-grad 1.0 --epochs "$EPOCHS")
 OPTS+=(--max-length "$MAX_LENGTH" --max-prompt-length "$MAX_PROMPT_LENGTH")
 OPTS+=(--t-max-length "$T_MAX_LENGTH" --t-max-prompt-length "$T_MAX_PROMPT_LENGTH")
 
-# Adaptive routing uses all three modes
+# Adaptive routing mode set.
 OPTS+=(--type kd)
 if [[ "$GEOMETRY" == 1 ]]; then
     OPTS+=(--geometry)
@@ -105,6 +115,7 @@ if [[ "$CKA" == 1 ]]; then
     OPTS+=(--cka)
 fi
 OPTS+=(--dual-adaptive-exposure --do-sample)
+OPTS+=(--adaptive-mode-set "$ADAPTIVE_MODE_SET")
 OPTS+=(--rho-self-init "${RHO_SELF_INIT:-0.1}" --rho-on-init "${RHO_ON_INIT:-0.05}")
 OPTS+=(--rho-self-max "${RHO_SELF_MAX:-0.25}" --rho-on-max "${RHO_ON_MAX:-0.25}")
 OPTS+=(--rho-self-increment "${RHO_SELF_INCREMENT:-0.025}" --rho-on-increment "${RHO_ON_INCREMENT:-0.025}")
@@ -141,5 +152,6 @@ printf 'Command: '
 printf '%q ' "${CMD[@]}"
 printf '\n'
 
+if [[ "${DRY_RUN:-0}" == 1 ]]; then exit 0; fi
 mkdir -p -- "$SAVE_PATH"
 exec "${CMD[@]}"
