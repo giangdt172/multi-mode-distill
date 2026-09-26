@@ -49,11 +49,14 @@ def complete_visible_steps(sample, tokenizer, separator):
 
 def sample_context(steps, separator, max_drop_ratio, rng, fixed_drop_ratio=None):
     if fixed_drop_ratio is not None:
-        # Drop a fixed fraction from the tail.  Since the unit is a complete
-        # step, round the number removed up to satisfy the requested ratio.
+        # Drop a fixed fraction of complete steps, choosing their positions
+        # randomly. Round up so the requested drop ratio is always satisfied.
         drop_count = math.ceil(len(steps) * fixed_drop_ratio)
-        keep_count = len(steps) - drop_count
-        return separator.join(steps[:keep_count]) if keep_count else ""
+        if drop_count == 0:
+            return separator.join(steps)
+        dropped = set(rng.sample(range(len(steps)), drop_count))
+        return separator.join(step for index, step in enumerate(steps)
+                              if index not in dropped)
     if len(steps) < 2:
         return ""
     drop_ratio = rng.uniform(0.0, max_drop_ratio)

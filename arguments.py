@@ -218,7 +218,7 @@ def add_distillation_args(parser: argparse.ArgumentParser):
     group.add_argument("--self-distill-context-drop-ratio", type=float, default=0.5,
                        help="Upper bound for a per-sample drop probability drawn uniformly from [0, bound]")
     group.add_argument("--self-distill-context-fixed-drop-ratio", type=float, default=None,
-                       help="Fixed fraction of trailing context steps to remove; "
+                       help="Fixed fraction of randomly selected context steps to remove; "
                             "overrides stochastic context dropping when set")
     group.add_argument("--self-distill-context-max-tokens", type=int, default=512,
                        help="Maximum token count of sampled self-distillation context, before template text")

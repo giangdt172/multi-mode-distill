@@ -26,8 +26,8 @@ export CONTEXT_MAX_NEW_TOKENS="${CONTEXT_MAX_NEW_TOKENS:-${SELF_DISTILL_CONTEXT_
 export T_MAX_PROMPT_LENGTH="${T_MAX_PROMPT_LENGTH:-$((MAX_PROMPT_LENGTH + CONTEXT_MAX_NEW_TOKENS))}"
 export T_MAX_LENGTH="${T_MAX_LENGTH:-$((MAX_LENGTH + T_MAX_PROMPT_LENGTH - MAX_PROMPT_LENGTH))}"
 
-# Keep adaptive OFF + SELF + ON unchanged. Only the fixed fraction of trailing
-# SELF context steps is ablated.
+# Keep adaptive OFF + SELF + ON unchanged. Only the fixed fraction of randomly
+# selected SELF context steps is ablated.
 CONTEXT_TRUNCATE_RATIOS=(0.00 0.25 0.50)
 ADAPTIVE_MODE_SET=all
 RESULTS_ROOT="${RESULTS_ROOT:-$BASE_PATH/results/qwen2.5-1.5B-Instruct-v2/context_truncate_ablation}"
