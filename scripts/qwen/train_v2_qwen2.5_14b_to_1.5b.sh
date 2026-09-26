@@ -58,6 +58,8 @@ KD_RATIO="${KD_RATIO:-0.5}"
 MAG_WEIGHT="${MAG_WEIGHT:-1.0}"
 GRAM_WEIGHT="${GRAM_WEIGHT:-1.0}"
 CKA_WEIGHT="${CKA_WEIGHT:-1.0}"
+MENGER_WEIGHT="${MENGER_WEIGHT:-0.0}"
+MENGER_EPS="${MENGER_EPS:-1.0e-6}"
 CKA="${CKA:-0}"
 DEFAULT_GEOMETRY=1
 if [[ "$CKA" == 1 ]]; then DEFAULT_GEOMETRY=0; fi
@@ -126,6 +128,7 @@ OPTS+=(--self-distill-context-max-tokens "$CONTEXT_MAX_NEW_TOKENS")
 OPTS+=(--kd-loss "$KD_LOSS" --kd-ratio "$KD_RATIO")
 OPTS+=(--skew-alpha "$SKEW_ALPHA")
 OPTS+=(--mag-weight "$MAG_WEIGHT" --gram-weight "$GRAM_WEIGHT" --cka-weight "$CKA_WEIGHT")
+OPTS+=(--menger-weight "$MENGER_WEIGHT" --menger-eps "$MENGER_EPS")
 OPTS+=(--distill-top-k "$DISTILL_TOP_K" --distill-temperature "$DISTILL_TEMPERATURE")
 OPTS+=(--step-separator "$STEP_SEPARATOR" --step-pooling "$STEP_POOLING")
 OPTS+=(--magnitude-normalization "$MAGNITUDE_NORMALIZATION" --eps 1e-6)
